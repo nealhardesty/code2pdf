@@ -21,6 +21,7 @@ type Config struct {
 	fontSize        float64
 	fontName        string
 	lineNumbers     bool
+	landscape       bool
 }
 
 // FileEntry represents a file to be included in the PDF
@@ -119,6 +120,7 @@ func parseFlags() Config {
 	fontSize := flag.Float64("font-size", 7.0, "Font size for code")
 	fontName := flag.String("font", "Courier", "Font name (Courier, Helvetica, Times)")
 	lineNumbers := flag.Bool("line-numbers", false, "Include line numbers in the PDF")
+	landscape := flag.Bool("landscape", true, "Use landscape orientation instead of portrait")
 
 	// Define a custom flag for multiple regex patterns
 	var blacklistPatterns multiFlag
@@ -147,6 +149,7 @@ func parseFlags() Config {
 		fontSize:        *fontSize,
 		fontName:        *fontName,
 		lineNumbers:     *lineNumbers,
+		landscape:       *landscape,
 	}
 }
 
@@ -324,7 +327,28 @@ func isTextFile(filePath string) bool {
 func createPDF(files []FileEntry, config Config) error {
 	baseDir := currentDirectoryBase()
 
-	pdf := gofpdf.New("P", "mm", "A4", "")
+	// Set orientation based on config
+	orientation := "P" // Portrait by default
+	if config.landscape {
+		orientation = "L" // Landscape
+	}
+
+	currentSection := "???"
+
+	pdf := gofpdf.New(orientation, "mm", "A4", "")
+
+	// Add page numbering in the footer
+	pdf.SetFooterFunc(func() {
+		// Set font for page numbers
+		pdf.SetFont("Arial", "I", 8)
+
+		// Go to 1.5 cm from bottom of the page
+		pdf.SetY(-15)
+
+		// Print page number right-aligned
+		pdf.CellFormat(0, 10, fmt.Sprintf("%s   -   [%d]", currentSection, pdf.PageNo()), "", 0, "R", false, 0, "")
+	})
+
 	pdf.SetFont(config.fontName, "", config.fontSize)
 
 	// Add a title page
@@ -333,6 +357,7 @@ func createPDF(files []FileEntry, config Config) error {
 	pdf.Cell(0, 10, baseDir)
 	pdf.Ln(20)
 
+	currentSection = "Table of Contents"
 	// Add table of contents
 	pdf.SetFont(config.fontName, "B", 12)
 	pdf.Cell(0, 10, "Table of Contents:")
@@ -354,6 +379,11 @@ func createPDF(files []FileEntry, config Config) error {
 		pdf.Cell(0, 10, fmt.Sprintf("%s/%s", baseDir, file.path))
 		pdf.Ln(10)
 
+		// Counter for continued pages
+		continuedPage := 1
+
+		currentSection = fmt.Sprintf("%s/%s page %d", baseDir, file.path, continuedPage)
+
 		// Add file content
 		pdf.SetFont(config.fontName, "", config.fontSize)
 		lines := strings.Split(file.content, "\n")
@@ -371,13 +401,21 @@ func createPDF(files []FileEntry, config Config) error {
 			pdf.Cell(0, 5, line)
 			pdf.Ln(5)
 
+			// Calculate appropriate page break threshold based on orientation
+			pageBreakThreshold := 270.0 // Default for portrait
+			if config.landscape {
+				pageBreakThreshold = 170.0 // Adjusted for landscape
+			}
+
 			// Add page break if we're near the bottom
-			if pdf.GetY() > 270 {
+			if pdf.GetY() > pageBreakThreshold {
+				currentSection = fmt.Sprintf("%s/%s page %d", baseDir, file.path, continuedPage)
 				pdf.AddPage()
 
 				// Re-add the file info on the new page
 				pdf.SetFont(config.fontName, "B", config.fontSize+2)
-				pdf.Cell(0, 10, file.path+" (continued)")
+				pdf.Cell(0, 10, baseDir+"/"+file.path+" (continued)")
+				continuedPage++
 				pdf.Ln(10)
 				pdf.SetFont(config.fontName, "", config.fontSize)
 			}
