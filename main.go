@@ -29,6 +29,8 @@ type FileEntry struct {
 	path     string
 	content  string
 	language string
+	size     int64  // Add size field
+	modTime  string // Add modTime field
 }
 
 // Common directories to skip by default
@@ -39,7 +41,7 @@ var defaultSkipDirs = []string{
 
 // Common files to skip by default
 var defaultBlacklistRegexes = []string{
-	".gitignore", ".DS_Store", "Thumbs.db",
+	".gitignore", ".DS_Store", "Thumbs.db", "CODEOWNERS", "go.sum",
 }
 
 // File extensions to language mappings for syntax highlighting information
@@ -109,7 +111,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("PDF created successfully: %s\n", config.outputFile)
+	fmt.Printf("\nPDF created successfully: %s\n", config.outputFile)
 }
 
 func parseFlags() Config {
@@ -290,6 +292,8 @@ func collectFiles(root string, blacklistRegexes []*regexp.Regexp, skipDirs, giti
 				path:     path,
 				content:  string(content),
 				language: extensionToLanguage[ext],
+				size:     info.Size(),                                  // Store file size
+				modTime:  info.ModTime().Format("2006-01-02 15:04:05"), // Store last modified time
 			})
 		}
 
@@ -315,13 +319,26 @@ func isTextFile(filePath string) bool {
 	}
 
 	// Check if there are any null bytes (common in binary files)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if buf[i] == 0 {
 			return false
 		}
 	}
 
 	return true
+}
+
+func formatFileSize(size int64) string {
+	const unit = 1024
+	if size < unit {
+		return fmt.Sprintf("%d B", size)
+	}
+	div, exp := int64(unit), 0
+	for n := size / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.2f %cB", float64(size)/float64(div), "KMGTPE"[exp])
 }
 
 func createPDF(files []FileEntry, config Config) error {
@@ -366,17 +383,20 @@ func createPDF(files []FileEntry, config Config) error {
 	pdf.SetFont(config.fontName, "", 12)
 
 	for i, file := range files {
-		pdf.Cell(0, 5, fmt.Sprintf("%d. %s/%s", i+1, baseDir, file.path))
+		humanReadableSize := formatFileSize(file.size) // Format file size
+		pdf.Cell(0, 5, fmt.Sprintf("%d. %s/%s (%s, Last Modified: %s)", i+1, baseDir, file.path, humanReadableSize, file.modTime))
 		pdf.Ln(5)
 	}
 
 	// Add each file
 	for _, file := range files {
+		humanReadableSize := formatFileSize(file.size) // Format file size
+		fmt.Printf("Importing %s (%s, Last Modified: %s)\n", file.path, humanReadableSize, file.modTime)
 		pdf.AddPage()
 
 		// Add file header
 		pdf.SetFont(config.fontName, "B", config.fontSize+2)
-		pdf.Cell(0, 10, fmt.Sprintf("%s/%s", baseDir, file.path))
+		pdf.Cell(0, 10, fmt.Sprintf("%s/%s (%s, Last Modified: %s)", baseDir, file.path, humanReadableSize, file.modTime))
 		pdf.Ln(10)
 
 		// Counter for continued pages
