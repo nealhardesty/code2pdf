@@ -14,14 +14,11 @@ import (
 
 // Config holds the application configuration
 type Config struct {
-	outputFile      string
-	blacklistRegexs []string
-	skipDirs        []string
-	useGitignore    bool
-	fontSize        float64
-	fontName        string
-	lineNumbers     bool
-	landscape       bool
+	outputFile  string
+	fontSize    float64
+	fontName    string
+	lineNumbers bool
+	landscape   bool
 }
 
 // FileEntry represents a file to be included in the PDF
@@ -33,16 +30,6 @@ type FileEntry struct {
 	modTime  string // Add modTime field
 }
 
-// Common directories to skip by default
-var defaultSkipDirs = []string{
-	".git", "node_modules", "vendor", "venv", ".venv",
-	"__pycache__", "dist", "build", ".idea", ".vscode",
-}
-
-// Common files to skip by default
-var defaultBlacklistRegexes = []string{
-	".gitignore", ".DS_Store", "Thumbs.db", "CODEOWNERS", "go.sum",
-}
 
 // File extensions to language mappings for syntax highlighting information
 var extensionToLanguage = map[string]string{
@@ -70,30 +57,30 @@ var extensionToLanguage = map[string]string{
 	".txt":  "Text",
 }
 
+// main is the entry point of the application. It parses command line flags,
+// loads ignore patterns from .gitignore and .code2pdf.ignore files, collects
+// files from the current directory, and generates a PDF document.
 func main() {
 	config := parseFlags()
 
-	// Compile blacklist regexes
-	var blacklistRegexes []*regexp.Regexp
-	for _, pattern := range config.blacklistRegexs {
-		if pattern != "" {
-			regex, err := regexp.Compile(pattern)
-			if err != nil {
-				fmt.Printf("Error compiling blacklist regex '%s': %v\n", pattern, err)
-				os.Exit(1)
-			}
-			blacklistRegexes = append(blacklistRegexes, regex)
-		}
-	}
+	// Load gitignore patterns from .gitignore and .code2pdf.ignore
+	gitignorePatterns := loadGitignorePatterns(".gitignore")
+	code2pdfPatterns := loadGitignorePatterns(".code2pdf.ignore")
+	allPatterns := append(gitignorePatterns, code2pdfPatterns...)
 
-	// Load gitignore patterns if needed
-	var gitignorePatterns []string
-	if config.useGitignore {
-		gitignorePatterns = loadGitignorePatterns()
+	// Output which ignore files are being used
+	if len(gitignorePatterns) > 0 {
+		fmt.Println("Respecting .gitignore for file filtering")
+	}
+	if len(code2pdfPatterns) > 0 {
+		fmt.Println("Respecting .code2pdf.ignore for file filtering")
+	}
+	if len(allPatterns) == 0 {
+		fmt.Println("No ignore files found - processing all text files")
 	}
 
 	// Collect files
-	files, err := collectFiles(".", blacklistRegexes, config.skipDirs, gitignorePatterns)
+	files, err := collectFiles(".", allPatterns)
 	if err != nil {
 		fmt.Printf("Error collecting files: %v\n", err)
 		os.Exit(1)
@@ -114,66 +101,35 @@ func main() {
 	fmt.Printf("\nPDF created successfully: %s\n", config.outputFile)
 }
 
+// parseFlags parses command line arguments and returns a Config struct
+// with the application settings.
 func parseFlags() Config {
 	outputFile := flag.String("o", "code.pdf", "Output PDF file name")
-	blacklistRegex := flag.String("blacklist", strings.Join(defaultBlacklistRegexes, ","), "Regex pattern for files to ignore (comma-separated for multiple patterns)")
-	skipDirsStr := flag.String("skip-dirs", strings.Join(defaultSkipDirs, ","), "Comma-separated list of directories to skip")
-	useGitignore := flag.Bool("gitignore", true, "Use ./.gitignore patterns for blacklisting as well")
 	fontSize := flag.Float64("font-size", 7.0, "Font size for code")
 	fontName := flag.String("font", "Courier", "Font name (Courier, Helvetica, Times)")
 	lineNumbers := flag.Bool("line-numbers", false, "Include line numbers in the PDF")
 	landscape := flag.Bool("landscape", true, "Use landscape orientation instead of portrait")
 
-	// Define a custom flag for multiple regex patterns
-	var blacklistPatterns multiFlag
-	flag.Var(&blacklistPatterns, "b", "Regex pattern to ignore (can be specified multiple times)")
-
 	flag.Parse()
 
-	skipDirs := strings.Split(*skipDirsStr, ",")
-
-	// Combine both ways of specifying blacklist patterns
-	var blacklistRegexs []string
-
-	// Add patterns from the -blacklist flag (comma-separated)
-	if *blacklistRegex != "" {
-		blacklistRegexs = append(blacklistRegexs, strings.Split(*blacklistRegex, ",")...)
-	}
-
-	// Add patterns from the -b flag (specified multiple times)
-	blacklistRegexs = append(blacklistRegexs, blacklistPatterns...)
-
 	return Config{
-		outputFile:      *outputFile,
-		blacklistRegexs: blacklistRegexs,
-		skipDirs:        skipDirs,
-		useGitignore:    *useGitignore,
-		fontSize:        *fontSize,
-		fontName:        *fontName,
-		lineNumbers:     *lineNumbers,
-		landscape:       *landscape,
+		outputFile:  *outputFile,
+		fontSize:    *fontSize,
+		fontName:    *fontName,
+		lineNumbers: *lineNumbers,
+		landscape:   *landscape,
 	}
 }
 
-// multiFlag is a custom flag type that can be specified multiple times
-type multiFlag []string
 
-func (f *multiFlag) String() string {
-	return strings.Join(*f, ",")
-}
-
-func (f *multiFlag) Set(value string) error {
-	*f = append(*f, value)
-	return nil
-}
-
-func loadGitignorePatterns() []string {
-	gitignoreFile := ".gitignore"
-	if _, err := os.Stat(gitignoreFile); os.IsNotExist(err) {
+// loadGitignorePatterns reads ignore patterns from the specified file.
+// It returns a slice of pattern strings, ignoring empty lines and comments.
+func loadGitignorePatterns(filename string) []string {
+	if _, err := os.Stat(filename); os.IsNotExist(err) {
 		return nil
 	}
 
-	file, err := os.Open(gitignoreFile)
+	file, err := os.Open(filename)
 	if err != nil {
 		return nil
 	}
@@ -191,6 +147,8 @@ func loadGitignorePatterns() []string {
 	return patterns
 }
 
+// matchesGitignore checks if a given file path matches any of the gitignore patterns.
+// It supports basic gitignore syntax including wildcards and directory patterns.
 func matchesGitignore(path string, patterns []string) bool {
 	if len(patterns) == 0 {
 		return false
@@ -230,17 +188,11 @@ func matchesGitignore(path string, patterns []string) bool {
 	return false
 }
 
-func shouldSkipDir(dirPath string, skipDirs []string) bool {
-	dir := filepath.Base(dirPath)
-	for _, skipDir := range skipDirs {
-		if skipDir == dir {
-			return true
-		}
-	}
-	return false
-}
 
-func collectFiles(root string, blacklistRegexes []*regexp.Regexp, skipDirs, gitignorePatterns []string) ([]FileEntry, error) {
+// collectFiles walks through the directory tree starting from root and collects
+// all text files that don't match the ignore patterns. Returns a slice of FileEntry
+// structs containing file metadata and content.
+func collectFiles(root string, gitignorePatterns []string) ([]FileEntry, error) {
 	var files []FileEntry
 
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
@@ -248,25 +200,16 @@ func collectFiles(root string, blacklistRegexes []*regexp.Regexp, skipDirs, giti
 			return err
 		}
 
-		// Skip directories in the skip list
-		if info.IsDir() {
-			if shouldSkipDir(path, skipDirs) {
+		// Skip files matching gitignore patterns
+		if matchesGitignore(path, gitignorePatterns) {
+			if info.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
-		// Skip files matching any blacklist regex
-		if len(blacklistRegexes) > 0 {
-			for _, regex := range blacklistRegexes {
-				if regex.MatchString(path) {
-					return nil
-				}
-			}
-		}
-
-		// Skip files matching gitignore patterns
-		if matchesGitignore(path, gitignorePatterns) {
+		// Don't process directories themselves
+		if info.IsDir() {
 			return nil
 		}
 
@@ -303,6 +246,8 @@ func collectFiles(root string, blacklistRegexes []*regexp.Regexp, skipDirs, giti
 	return files, err
 }
 
+// isTextFile determines if a file is a text file by reading the first 512 bytes
+// and checking for null bytes which are common in binary files.
 func isTextFile(filePath string) bool {
 	// Open the file
 	file, err := os.Open(filePath)
@@ -328,6 +273,8 @@ func isTextFile(filePath string) bool {
 	return true
 }
 
+// formatFileSize converts a file size in bytes to a human-readable format
+// using appropriate units (B, KB, MB, GB, etc.).
 func formatFileSize(size int64) string {
 	const unit = 1024
 	if size < unit {
@@ -341,6 +288,9 @@ func formatFileSize(size int64) string {
 	return fmt.Sprintf("%.2f %cB", float64(size)/float64(div), "KMGTPE"[exp])
 }
 
+// createPDF generates a PDF document from the collected files using the specified
+// configuration. It creates a title page, table of contents, and includes each file
+// with proper formatting and page breaks.
 func createPDF(files []FileEntry, config Config) error {
 	baseDir := currentDirectoryBase()
 
@@ -445,6 +395,8 @@ func createPDF(files []FileEntry, config Config) error {
 	return pdf.OutputFileAndClose(config.outputFile)
 }
 
+// currentDirectoryBase returns the base name of the current working directory.
+// It's used for the PDF title and headers. Returns "???" if unable to determine.
 func currentDirectoryBase() string {
 	// Get the current working directory
 	dir, err := os.Getwd()

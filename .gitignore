@@ -26,3 +26,6 @@ go.work.sum
 
 # default generated files
 code.pdf
+
+# executable
+code2pdf
