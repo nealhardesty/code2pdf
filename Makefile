@@ -4,9 +4,15 @@ GOCLEAN=$(GOCMD) clean
 GOMOD=$(GOCMD) mod
 GOTEST=$(GOCMD) test
 
-build:
-	$(GOBUILD) .
+default: build
 
+increment-version:
+	@echo 'package main' > version.go
+	@echo 'const Version = "'$$(date +%Y%m%d%H%M%S)'"' >> version.go
+	@echo "Updated version to $$(date +%Y%m%d%H%M%S)"
+
+build: increment-version
+	$(GOBUILD) .
 run:
 	go run .
 

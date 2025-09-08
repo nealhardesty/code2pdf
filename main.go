@@ -12,6 +12,7 @@ import (
 	"github.com/jung-kurt/gofpdf"
 )
 
+
 // Config holds the application configuration
 type Config struct {
 	outputFile  string
@@ -109,8 +110,21 @@ func parseFlags() Config {
 	fontName := flag.String("font", "Courier", "Font name (Courier, Helvetica, Times)")
 	lineNumbers := flag.Bool("line-numbers", false, "Include line numbers in the PDF")
 	landscape := flag.Bool("landscape", true, "Use landscape orientation instead of portrait")
+	version := flag.Bool("version", false, "Show version and exit")
+	
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "code2pdf v%s - Convert code directories to PDF documents\n\n", Version)
+		fmt.Fprintf(os.Stderr, "Usage: %s [options]\n\nOptions:\n", os.Args[0])
+		flag.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nFile filtering respects .gitignore and .code2pdf.ignore files.\n")
+	}
 
 	flag.Parse()
+	
+	if *version {
+		fmt.Printf("code2pdf %s\n", Version)
+		os.Exit(0)
+	}
 
 	return Config{
 		outputFile:  *outputFile,
