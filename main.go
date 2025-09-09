@@ -164,11 +164,19 @@ func loadGitignorePatterns(filename string) []string {
 // matchesGitignore checks if a given file path matches any of the gitignore patterns.
 // It supports basic gitignore syntax including wildcards and directory patterns.
 func matchesGitignore(path string, patterns []string) bool {
-	if len(patterns) == 0 {
+	// Always ignore .git directory by default
+	defaultIgnores := []string{".git/"}
+	allPatterns := append(defaultIgnores, patterns...)
+	
+	if len(allPatterns) == 0 {
 		return false
 	}
 
-	for _, pattern := range patterns {
+	// Clean the path (remove leading ./)
+	cleanPath := strings.TrimPrefix(path, "./")
+	baseName := filepath.Base(cleanPath)
+
+	for _, pattern := range allPatterns {
 		// Handle negation patterns
 		if strings.HasPrefix(pattern, "!") {
 			continue // Simplified for this example
@@ -177,23 +185,26 @@ func matchesGitignore(path string, patterns []string) bool {
 		// Handle directory patterns
 		if strings.HasSuffix(pattern, "/") {
 			dirPattern := pattern[:len(pattern)-1]
-			if strings.HasPrefix(path, dirPattern) {
+			if strings.HasPrefix(cleanPath, dirPattern+"/") || cleanPath == dirPattern {
 				return true
 			}
 			continue
 		}
 
-		// Handle exact matches
-		if pattern == path {
+		// Handle exact matches (both full path and basename)
+		if pattern == cleanPath || pattern == baseName {
 			return true
 		}
 
-		// Handle wildcard patterns (simplified)
+		// Handle wildcard patterns
 		if strings.Contains(pattern, "*") {
 			// Convert the glob pattern to a regex pattern
-			regexPattern := "^" + strings.ReplaceAll(pattern, "*", ".*") + "$"
-			matched, err := regexp.MatchString(regexPattern, path)
-			if err == nil && matched {
+			regexPattern := "^" + strings.ReplaceAll(regexp.QuoteMeta(pattern), "\\*", ".*") + "$"
+			// Check against both full path and basename
+			if matched, err := regexp.MatchString(regexPattern, cleanPath); err == nil && matched {
+				return true
+			}
+			if matched, err := regexp.MatchString(regexPattern, baseName); err == nil && matched {
 				return true
 			}
 		}
