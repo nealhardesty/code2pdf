@@ -81,7 +81,7 @@ func main() {
 	}
 
 	// Collect files
-	files, err := collectFiles(".", allPatterns)
+	files, stats, err := collectFiles(".", allPatterns)
 	if err != nil {
 		fmt.Printf("Error collecting files: %v\n", err)
 		os.Exit(1)
@@ -100,6 +100,40 @@ func main() {
 	}
 
 	fmt.Printf("\nPDF created successfully: %s\n", config.outputFile)
+	fmt.Printf("Statistics: %d files included, %d files/directories ignored\n", stats.Included, stats.Ignored)
+	
+	// Display top 5 file extensions
+	if len(stats.Extensions) > 0 {
+		fmt.Printf("Top file types included:\n")
+		
+		// Convert map to slice of pairs for sorting
+		type ExtCount struct {
+			ext   string
+			count int
+		}
+		var extCounts []ExtCount
+		for ext, count := range stats.Extensions {
+			extCounts = append(extCounts, ExtCount{ext, count})
+		}
+		
+		// Sort by count descending
+		for i := 0; i < len(extCounts)-1; i++ {
+			for j := i + 1; j < len(extCounts); j++ {
+				if extCounts[i].count < extCounts[j].count {
+					extCounts[i], extCounts[j] = extCounts[j], extCounts[i]
+				}
+			}
+		}
+		
+		// Display top 5
+		limit := len(extCounts)
+		if limit > 5 {
+			limit = 5
+		}
+		for i := 0; i < limit; i++ {
+			fmt.Printf("  %s: %d files\n", extCounts[i].ext, extCounts[i].count)
+		}
+	}
 }
 
 // parseFlags parses command line arguments and returns a Config struct
@@ -214,11 +248,21 @@ func matchesGitignore(path string, patterns []string) bool {
 }
 
 
+// FileStats holds statistics about file processing
+type FileStats struct {
+	Included   int
+	Ignored    int
+	Extensions map[string]int
+}
+
 // collectFiles walks through the directory tree starting from root and collects
 // all text files that don't match the ignore patterns. Returns a slice of FileEntry
-// structs containing file metadata and content.
-func collectFiles(root string, gitignorePatterns []string) ([]FileEntry, error) {
+// structs containing file metadata and content, along with processing statistics.
+func collectFiles(root string, gitignorePatterns []string) ([]FileEntry, FileStats, error) {
 	var files []FileEntry
+	stats := FileStats{
+		Extensions: make(map[string]int),
+	}
 
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -228,8 +272,12 @@ func collectFiles(root string, gitignorePatterns []string) ([]FileEntry, error) 
 		// Skip files matching gitignore patterns
 		if matchesGitignore(path, gitignorePatterns) {
 			if info.IsDir() {
+				fmt.Printf("Ignoring directory: %s\n", path)
+				stats.Ignored++
 				return filepath.SkipDir
 			}
+			fmt.Printf("Ignoring file: %s\n", path)
+			stats.Ignored++
 			return nil
 		}
 
@@ -263,12 +311,20 @@ func collectFiles(root string, gitignorePatterns []string) ([]FileEntry, error) 
 				size:     info.Size(),                                  // Store file size
 				modTime:  info.ModTime().Format("2006-01-02 15:04:05"), // Store last modified time
 			})
+			stats.Included++
+			// Count extensions (use language name for better display)
+			langName := extensionToLanguage[ext]
+			stats.Extensions[langName]++
+		} else {
+			// File is not a recognized text file
+			fmt.Printf("Skipping non-text file: %s\n", path)
+			stats.Ignored++
 		}
 
 		return nil
 	})
 
-	return files, err
+	return files, stats, err
 }
 
 // isTextFile determines if a file is a text file by reading the first 512 bytes
