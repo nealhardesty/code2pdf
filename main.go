@@ -24,39 +24,13 @@ type Config struct {
 
 // FileEntry represents a file to be included in the PDF
 type FileEntry struct {
-	path     string
-	content  string
-	language string
-	size     int64  // Add size field
-	modTime  string // Add modTime field
+	path    string
+	content string
+	size    int64  // Add size field
+	modTime string // Add modTime field
 }
 
 
-// File extensions to language mappings for syntax highlighting information
-var extensionToLanguage = map[string]string{
-	".go":   "Go",
-	".py":   "Python",
-	".rs":   "Rust",
-	".js":   "JavaScript",
-	".ts":   "TypeScript",
-	".html": "HTML",
-	".css":  "CSS",
-	".java": "Java",
-	".c":    "C",
-	".cpp":  "C++",
-	".h":    "C/C++ Header",
-	".rb":   "Ruby",
-	".php":  "PHP",
-	".sh":   "Shell",
-	".md":   "Markdown",
-	".json": "JSON",
-	".xml":  "XML",
-	".yml":  "YAML",
-	".yaml": "YAML",
-	".toml": "TOML",
-	".sql":  "SQL",
-	".txt":  "Text",
-}
 
 // main is the entry point of the application. It parses command line flags,
 // loads ignore patterns from .gitignore and .code2pdf.ignore files, collects
@@ -311,38 +285,29 @@ func collectFiles(root string, gitignorePatterns, code2pdfPatterns []string) ([]
 			return nil
 		}
 
-		// Skip binary files and consider only text files
-		ext := strings.ToLower(filepath.Ext(path))
-		_, isCodeFile := extensionToLanguage[ext]
-
-		// If not recognized extension, check if it might be text
-		if !isCodeFile {
-			if isTextFile(path) {
-				extensionToLanguage[ext] = "Text"
-				isCodeFile = true
-			}
-		}
-
-		if isCodeFile {
+		// Check if this is a text file
+		if isTextFile(path) {
 			content, err := os.ReadFile(path)
 			if err != nil {
 				return err
 			}
 
 			files = append(files, FileEntry{
-				path:     path,
-				content:  string(content),
-				language: extensionToLanguage[ext],
-				size:     info.Size(),                                  // Store file size
-				modTime:  info.ModTime().Format("2006-01-02 15:04:05"), // Store last modified time
+				path:    path,
+				content: string(content),
+				size:    info.Size(),                                  // Store file size
+				modTime: info.ModTime().Format("2006-01-02 15:04:05"), // Store last modified time
 			})
 			stats.Included++
-			// Count extensions (use language name for better display)
-			langName := extensionToLanguage[ext]
-			stats.Extensions[langName]++
+			// Count extensions (use file extension for display)
+			ext := strings.ToLower(filepath.Ext(path))
+			if ext == "" {
+				ext = "(no extension)"
+			}
+			stats.Extensions[ext]++
 		} else {
-			// File is not a recognized text file
-			fmt.Printf("Skipping non-text file: %s\n", path)
+			// File is not a text file
+			fmt.Printf("Skipping binary file: %s\n", path)
 			stats.Ignored++
 		}
 
@@ -352,31 +317,130 @@ func collectFiles(root string, gitignorePatterns, code2pdfPatterns []string) ([]
 	return files, stats, err
 }
 
-// isTextFile determines if a file is a text file by reading the first 512 bytes
-// and checking for null bytes which are common in binary files.
+// isTextFile determines if a file is a text file by analyzing its content.
+// Uses multiple heuristics including null byte detection, UTF-8 validation,
+// and printable character ratio analysis.
 func isTextFile(filePath string) bool {
-	// Open the file
 	file, err := os.Open(filePath)
 	if err != nil {
 		return false
 	}
 	defer file.Close()
 
-	// Read the first 512 bytes
-	buf := make([]byte, 512)
+	// Read up to 8KB for better detection
+	buf := make([]byte, 8192)
 	n, err := file.Read(buf)
-	if err != nil {
+	if err != nil && n == 0 {
 		return false
 	}
-
-	// Check if there are any null bytes (common in binary files)
-	for i := range n {
-		if buf[i] == 0 {
-			return false
+	
+	data := buf[:n]
+	
+	// Empty files are considered text
+	if n == 0 {
+		return true
+	}
+	
+	// Check for null bytes (strong indicator of binary content)
+	nullCount := 0
+	for i := 0; i < n; i++ {
+		if data[i] == 0 {
+			nullCount++
 		}
 	}
+	
+	// If more than 1% null bytes, likely binary
+	if float64(nullCount)/float64(n) > 0.01 {
+		return false
+	}
+	
+	// Check if content is valid UTF-8
+	if !isValidUTF8(data) {
+		return false
+	}
+	
+	// Count printable characters
+	printableCount := 0
+	for _, b := range data {
+		if isPrintableASCII(b) || b == '\t' || b == '\n' || b == '\r' {
+			printableCount++
+		}
+	}
+	
+	// If less than 70% printable characters, likely binary
+	printableRatio := float64(printableCount) / float64(n)
+	return printableRatio >= 0.70
+}
 
+// isValidUTF8 checks if the data is valid UTF-8
+func isValidUTF8(data []byte) bool {
+	for len(data) > 0 {
+		r, size := decodeUTF8Rune(data)
+		if r == 0xFFFD && size == 1 {
+			return false // Invalid UTF-8 sequence
+		}
+		data = data[size:]
+	}
 	return true
+}
+
+// decodeUTF8Rune decodes a single UTF-8 rune from data
+func decodeUTF8Rune(data []byte) (rune, int) {
+	if len(data) == 0 {
+		return 0, 0
+	}
+	
+	b0 := data[0]
+	
+	// ASCII
+	if b0 < 0x80 {
+		return rune(b0), 1
+	}
+	
+	// Multi-byte sequences
+	if b0 < 0xC2 {
+		return 0xFFFD, 1
+	}
+	
+	if b0 < 0xE0 {
+		if len(data) < 2 {
+			return 0xFFFD, 1
+		}
+		b1 := data[1]
+		if b1 < 0x80 || b1 >= 0xC0 {
+			return 0xFFFD, 1
+		}
+		return rune(b0&0x1F)<<6 | rune(b1&0x3F), 2
+	}
+	
+	if b0 < 0xF0 {
+		if len(data) < 3 {
+			return 0xFFFD, 1
+		}
+		b1, b2 := data[1], data[2]
+		if b1 < 0x80 || b1 >= 0xC0 || b2 < 0x80 || b2 >= 0xC0 {
+			return 0xFFFD, 1
+		}
+		return rune(b0&0x0F)<<12 | rune(b1&0x3F)<<6 | rune(b2&0x3F), 3
+	}
+	
+	if b0 < 0xF8 {
+		if len(data) < 4 {
+			return 0xFFFD, 1
+		}
+		b1, b2, b3 := data[1], data[2], data[3]
+		if b1 < 0x80 || b1 >= 0xC0 || b2 < 0x80 || b2 >= 0xC0 || b3 < 0x80 || b3 >= 0xC0 {
+			return 0xFFFD, 1
+		}
+		return rune(b0&0x07)<<18 | rune(b1&0x3F)<<12 | rune(b2&0x3F)<<6 | rune(b3&0x3F), 4
+	}
+	
+	return 0xFFFD, 1
+}
+
+// isPrintableASCII checks if a byte is a printable ASCII character
+func isPrintableASCII(b byte) bool {
+	return b >= 32 && b <= 126
 }
 
 // formatFileSize converts a file size in bytes to a human-readable format
