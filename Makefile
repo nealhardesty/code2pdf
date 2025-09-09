@@ -4,6 +4,7 @@ GOCLEAN=$(GOCMD) clean
 GOMOD=$(GOCMD) mod
 GOTEST=$(GOCMD) test
 
+.PHONY: build run clean mod test
 default: build
 
 increment-version:
@@ -26,4 +27,5 @@ mod:
 test:
 	$(GOTEST) -v ./...
 
-.PHONY: build run clean mod test
+install:
+	go install .
