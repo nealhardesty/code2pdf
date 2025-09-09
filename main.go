@@ -74,7 +74,7 @@ func main() {
 	}
 
 	fmt.Printf("\nPDF created successfully: %s\n", config.outputFile)
-	fmt.Printf("Statistics: %d files included, %d files/directories ignored\n", stats.Included, stats.Ignored)
+	fmt.Printf("Statistics: %d files included, %d files/directories ignored, %d binary files skipped\n", stats.Included, stats.Ignored, stats.Binary)
 	
 	// Display top 5 file extensions
 	if len(stats.Extensions) > 0 {
@@ -248,6 +248,7 @@ func checkPatternMatch(pattern, cleanPath, baseName string) bool {
 type FileStats struct {
 	Included   int
 	Ignored    int
+	Binary     int
 	Extensions map[string]int
 }
 
@@ -308,7 +309,7 @@ func collectFiles(root string, gitignorePatterns, code2pdfPatterns []string) ([]
 		} else {
 			// File is not a text file
 			fmt.Printf("Skipping binary file: %s\n", path)
-			stats.Ignored++
+			stats.Binary++
 		}
 
 		return nil
