@@ -60,14 +60,14 @@ var extensionToLanguage = map[string]string{
 
 // main is the entry point of the application. It parses command line flags,
 // loads ignore patterns from .gitignore and .code2pdf.ignore files, collects
-// files from the current directory, and generates a PDF document.
+// files from the current directory with detailed logging, and generates a PDF
+// document with comprehensive processing statistics.
 func main() {
 	config := parseFlags()
 
 	// Load gitignore patterns from .gitignore and .code2pdf.ignore
 	gitignorePatterns := loadGitignorePatterns(".gitignore")
 	code2pdfPatterns := loadGitignorePatterns(".code2pdf.ignore")
-	allPatterns := append(gitignorePatterns, code2pdfPatterns...)
 
 	// Output which ignore files are being used
 	if len(gitignorePatterns) > 0 {
@@ -76,12 +76,12 @@ func main() {
 	if len(code2pdfPatterns) > 0 {
 		fmt.Println("Respecting .code2pdf.ignore for file filtering")
 	}
-	if len(allPatterns) == 0 {
+	if len(gitignorePatterns) == 0 && len(code2pdfPatterns) == 0 {
 		fmt.Println("No ignore files found - processing all text files")
 	}
 
 	// Collect files
-	files, stats, err := collectFiles(".", allPatterns)
+	files, stats, err := collectFiles(".", gitignorePatterns, code2pdfPatterns)
 	if err != nil {
 		fmt.Printf("Error collecting files: %v\n", err)
 		os.Exit(1)
@@ -195,52 +195,74 @@ func loadGitignorePatterns(filename string) []string {
 	return patterns
 }
 
-// matchesGitignore checks if a given file path matches any of the gitignore patterns.
+// IgnoreMatch holds information about what rule matched and from which file
+type IgnoreMatch struct {
+	Matched bool
+	Rule    string
+	Source  string
+}
+
+// matchesGitignore checks if a given file path matches any ignore patterns from
+// .gitignore or .code2pdf.ignore files, plus the default .git/ directory exclusion.
 // It supports basic gitignore syntax including wildcards and directory patterns.
-func matchesGitignore(path string, patterns []string) bool {
-	// Always ignore .git directory by default
-	defaultIgnores := []string{".git/"}
-	allPatterns := append(defaultIgnores, patterns...)
+// Returns detailed match information including the specific rule and source file.
+func matchesGitignore(path string, gitignorePatterns, code2pdfPatterns []string) IgnoreMatch {
+	// Check default .git/ ignore first
+	cleanPath := strings.TrimPrefix(path, "./")
+	baseName := filepath.Base(cleanPath)
 	
-	if len(allPatterns) == 0 {
+	if strings.HasPrefix(cleanPath, ".git/") || cleanPath == ".git" {
+		return IgnoreMatch{Matched: true, Rule: ".git/", Source: "(default)"}
+	}
+
+	// Check .gitignore patterns
+	for _, pattern := range gitignorePatterns {
+		if checkPatternMatch(pattern, cleanPath, baseName) {
+			return IgnoreMatch{Matched: true, Rule: pattern, Source: ".gitignore"}
+		}
+	}
+	
+	// Check .code2pdf.ignore patterns
+	for _, pattern := range code2pdfPatterns {
+		if checkPatternMatch(pattern, cleanPath, baseName) {
+			return IgnoreMatch{Matched: true, Rule: pattern, Source: ".code2pdf.ignore"}
+		}
+	}
+
+	return IgnoreMatch{Matched: false}
+}
+
+// checkPatternMatch checks if a pattern matches the given path
+func checkPatternMatch(pattern, cleanPath, baseName string) bool {
+	// Handle negation patterns
+	if strings.HasPrefix(pattern, "!") {
+		return false // Simplified for this example
+	}
+
+	// Handle directory patterns
+	if strings.HasSuffix(pattern, "/") {
+		dirPattern := pattern[:len(pattern)-1]
+		if strings.HasPrefix(cleanPath, dirPattern+"/") || cleanPath == dirPattern {
+			return true
+		}
 		return false
 	}
 
-	// Clean the path (remove leading ./)
-	cleanPath := strings.TrimPrefix(path, "./")
-	baseName := filepath.Base(cleanPath)
+	// Handle exact matches (both full path and basename)
+	if pattern == cleanPath || pattern == baseName {
+		return true
+	}
 
-	for _, pattern := range allPatterns {
-		// Handle negation patterns
-		if strings.HasPrefix(pattern, "!") {
-			continue // Simplified for this example
-		}
-
-		// Handle directory patterns
-		if strings.HasSuffix(pattern, "/") {
-			dirPattern := pattern[:len(pattern)-1]
-			if strings.HasPrefix(cleanPath, dirPattern+"/") || cleanPath == dirPattern {
-				return true
-			}
-			continue
-		}
-
-		// Handle exact matches (both full path and basename)
-		if pattern == cleanPath || pattern == baseName {
+	// Handle wildcard patterns
+	if strings.Contains(pattern, "*") {
+		// Convert the glob pattern to a regex pattern
+		regexPattern := "^" + strings.ReplaceAll(regexp.QuoteMeta(pattern), "\\*", ".*") + "$"
+		// Check against both full path and basename
+		if matched, err := regexp.MatchString(regexPattern, cleanPath); err == nil && matched {
 			return true
 		}
-
-		// Handle wildcard patterns
-		if strings.Contains(pattern, "*") {
-			// Convert the glob pattern to a regex pattern
-			regexPattern := "^" + strings.ReplaceAll(regexp.QuoteMeta(pattern), "\\*", ".*") + "$"
-			// Check against both full path and basename
-			if matched, err := regexp.MatchString(regexPattern, cleanPath); err == nil && matched {
-				return true
-			}
-			if matched, err := regexp.MatchString(regexPattern, baseName); err == nil && matched {
-				return true
-			}
+		if matched, err := regexp.MatchString(regexPattern, baseName); err == nil && matched {
+			return true
 		}
 	}
 
@@ -256,9 +278,10 @@ type FileStats struct {
 }
 
 // collectFiles walks through the directory tree starting from root and collects
-// all text files that don't match the ignore patterns. Returns a slice of FileEntry
-// structs containing file metadata and content, along with processing statistics.
-func collectFiles(root string, gitignorePatterns []string) ([]FileEntry, FileStats, error) {
+// all text files that don't match the ignore patterns from .gitignore and .code2pdf.ignore.
+// Returns a slice of FileEntry structs with file metadata and content, plus detailed
+// processing statistics including file counts and extension breakdowns.
+func collectFiles(root string, gitignorePatterns, code2pdfPatterns []string) ([]FileEntry, FileStats, error) {
 	var files []FileEntry
 	stats := FileStats{
 		Extensions: make(map[string]int),
@@ -270,13 +293,15 @@ func collectFiles(root string, gitignorePatterns []string) ([]FileEntry, FileSta
 		}
 
 		// Skip files matching gitignore patterns
-		if matchesGitignore(path, gitignorePatterns) {
+		// Skip files matching gitignore patterns
+		match := matchesGitignore(path, gitignorePatterns, code2pdfPatterns)
+		if match.Matched {
 			if info.IsDir() {
-				fmt.Printf("Ignoring directory: %s\n", path)
+				fmt.Printf("Ignoring directory %s [%s: %s]\n", path, match.Source, match.Rule)
 				stats.Ignored++
 				return filepath.SkipDir
 			}
-			fmt.Printf("Ignoring file: %s\n", path)
+			fmt.Printf("Ignoring %s [%s: %s]\n", path, match.Source, match.Rule)
 			stats.Ignored++
 			return nil
 		}
